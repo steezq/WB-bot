@@ -42,7 +42,7 @@ async def main():
     @dp.message(CommandStart())
     async def cmd_start(message: Message):
         if not is_allowed(message.from_user.id):
-            await message.answer("⛔ Доступ запрещён.")
+            await message.answer("⛔ Доступ закрыт. Для получения доступа напишите: @steezq")
             return
         user_histories.pop(message.from_user.id, None)
         await message.answer(
