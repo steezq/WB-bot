@@ -76,16 +76,41 @@ class WBApiClient:
         return data or []
 
     async def get_adv_campaigns(self) -> list:
-        url = f"{WB_ADV_URL}/adv/v1/promotion/count"
-        data = await self._get(url)
+        """Get all campaigns with details using v1/promotion/adverts endpoint."""
+        import asyncio
+        # Step 1: get all campaign IDs
+        url_count = f"{WB_ADV_URL}/adv/v1/promotion/count"
+        data = await self._get(url_count)
         if not data:
             return []
-        campaigns = []
+
+        # Collect all IDs
+        all_ids = []
         for adv_type in data.get("adverts", []):
             for camp in adv_type.get("advert_list", []):
-                camp["type"] = adv_type.get("type")
-                campaigns.append(camp)
-        return campaigns
+                if camp.get("advertId"):
+                    all_ids.append(camp["advertId"])
+
+        if not all_ids:
+            return []
+
+        await asyncio.sleep(0.5)
+
+        # Step 2: get details for all campaigns (max 50 per request)
+        all_campaigns = []
+        for i in range(0, len(all_ids), 50):
+            batch = all_ids[i:i+50]
+            ids_param = ",".join(str(x) for x in batch)
+            url_details = f"{WB_ADV_URL}/adv/v1/promotion/adverts"
+            details = await self._get(url_details, {"id": ids_param})
+            if details and isinstance(details, list):
+                all_campaigns.extend(details)
+            elif details and isinstance(details, dict):
+                all_campaigns.append(details)
+            if i + 50 < len(all_ids):
+                await asyncio.sleep(0.5)
+
+        return all_campaigns
 
     async def get_adv_stats(self, date_from: str, date_to: str, campaign_ids: list = None) -> list:
         """Get advertising stats using new v3 API endpoint."""
