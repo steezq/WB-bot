@@ -1,4 +1,3 @@
-
 import json
 import logging
 import aiohttp
@@ -387,16 +386,34 @@ async def _run_get_adv_campaigns() -> str:
         -1: "удалена", 4: "готова к запуску", 7: "завершена",
         8: "отказ", 9: "идут показы", 11: "на паузе"
     }
+    TYPE_MAP = {
+        4: "каталог", 5: "карточка товара", 6: "поиск", 7: "рекомендации", 8: "автореклама"
+    }
     result = []
-    for c in campaigns[:20]:
+    for c in campaigns[:30]:
+        # WB API v1/promotion/adverts returns different field names
+        advert_id = c.get("advertId") or c.get("id")
+        name = c.get("name") or c.get("campaignName") or "Без названия"
+        status_code = c.get("status")
+        adv_type = c.get("type") or c.get("advertType")
+        budget = c.get("budget") or c.get("dailyBudget")
         result.append({
-            "id": c.get("advertId"),
-            "name": c.get("name") or "Без названия",
-            "status": STATUS_MAP.get(c.get("status"), str(c.get("status"))),
-            "type": c.get("type"),
-            "budget_rub": c.get("budget")
+            "id": advert_id,
+            "name": name,
+            "status_code": status_code,
+            "status": STATUS_MAP.get(status_code, f"код {status_code}"),
+            "type": TYPE_MAP.get(adv_type, f"тип {adv_type}"),
+            "budget_rub": budget
         })
-    return json.dumps({"total_campaigns": len(campaigns), "campaigns": result}, ensure_ascii=False)
+
+    active = [r for r in result if r.get("status_code") == 9]
+    paused = [r for r in result if r.get("status_code") == 11]
+    return json.dumps({
+        "total_campaigns": len(campaigns),
+        "active_count": len(active),
+        "paused_count": len(paused),
+        "campaigns": result
+    }, ensure_ascii=False)
 
 
 async def _run_get_adv_balance() -> str:
