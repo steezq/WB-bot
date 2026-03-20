@@ -102,7 +102,7 @@ class WBApiClient:
             batch = all_ids[i:i+50]
             ids_param = ",".join(str(x) for x in batch)
             url_details = f"{WB_ADV_URL}/adv/v1/promotion/adverts"
-            details = await self._get(url_details, {"id": ids_param})
+            details = await self._post(url_details, batch)
             if details and isinstance(details, list):
                 all_campaigns.extend(details)
             elif details and isinstance(details, dict):
