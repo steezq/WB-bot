@@ -1,192 +1,94 @@
 import asyncio
 import logging
-import os
-from datetime import datetime, timedelta
-
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from aiogram.filters import CommandStart, Command
+from aiogram.fsm.storage.memory import MemoryStorage
+from config import BOT_TOKEN, ALLOWED_USERS
+from ai_agent import ask_agent
 
-import wb_api
-import ai_advisor
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-WB_API_KEY = os.getenv("WB_API_KEY", "")
-CHAT_ID = os.getenv("CHAT_ID", "")
-REPORT_HOUR = int(os.getenv("REPORT_HOUR", "9"))  # час отправки ежедневного отчёта
-
-bot = Bot(token=TELEGRAM_TOKEN)
-dp = Dispatcher()
+user_histories: dict[int, list[dict]] = {}
+MAX_HISTORY = 20
 
 
-# ─── Команды ────────────────────────────────────────────────────────────────
-
-@dp.message(Command("start"))
-async def cmd_start(message: Message):
-    await message.answer(
-        "👋 Привет! Я WB Analytics Bot.\n\n"
-        "Команды:\n"
-        "/report — ежедневный отчёт прямо сейчас\n"
-        "/stock — остатки по складам\n"
-        "/ads — статистика рекламы\n"
-        "/ask [вопрос] — задать вопрос AI-аналитику\n\n"
-        f"Автоотчёт приходит каждый день в {REPORT_HOUR}:00 🕘"
-    )
+def is_allowed(user_id: int) -> bool:
+    if not ALLOWED_USERS:
+        return True
+    return user_id in ALLOWED_USERS
 
 
-@dp.message(Command("report"))
-async def cmd_report(message: Message):
-    await message.answer("⏳ Собираю данные...")
-    try:
-        text = await build_daily_report()
-        await message.answer(text, parse_mode="Markdown")
-    except Exception as e:
-        logger.error(f"Report error: {e}")
-        await message.answer(f"❌ Ошибка при получении данных: {e}")
+def get_history(user_id: int) -> list[dict]:
+    return user_histories.get(user_id, [])
 
 
-@dp.message(Command("stock"))
-async def cmd_stock(message: Message):
-    await message.answer("⏳ Загружаю остатки...")
-    try:
-        stocks = await wb_api.get_stocks(WB_API_KEY)
-        if not stocks:
-            await message.answer("Нет данных по остаткам.")
-            return
-        lines = ["📦 *Остатки по товарам:*\n"]
-        for item in stocks[:20]:
-            qty = item.get("quantity", 0)
-            name = item.get("subject", "Без названия")
-            article = item.get("supplierArticle", "—")
-            emoji = "🔴" if qty <= 5 else "🟡" if qty <= 20 else "🟢"
-            lines.append(f"{emoji} {name} (арт. {article}): *{qty} шт.*")
-        await message.answer("\n".join(lines), parse_mode="Markdown")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
+def add_to_history(user_id: int, role: str, content: str):
+    if user_id not in user_histories:
+        user_histories[user_id] = []
+    user_histories[user_id].append({"role": role, "content": content})
+    if len(user_histories[user_id]) > MAX_HISTORY:
+        user_histories[user_id] = user_histories[user_id][-MAX_HISTORY:]
 
-
-@dp.message(Command("ads"))
-async def cmd_ads(message: Message):
-    await message.answer("⏳ Загружаю данные по рекламе...")
-    try:
-        ads = await wb_api.get_ads_stats(WB_API_KEY)
-        if not ads:
-            await message.answer("Нет данных по рекламе (или нет активных кампаний).")
-            return
-        lines = ["📢 *Статистика рекламы:*\n"]
-        total_spend = 0
-        for camp in ads[:10]:
-            spend = camp.get("sum", 0)
-            total_spend += spend
-            name = camp.get("advertName", "Кампания")
-            ctr = camp.get("ctr", 0)
-            cpo = camp.get("cpo", 0)
-            views = camp.get("views", 0)
-            clicks = camp.get("clicks", 0)
-            lines.append(
-                f"• *{name}*\n"
-                f"  Расход: {spend:,.0f} ₽ | CTR: {ctr:.1f}% | CPO: {cpo:,.0f} ₽\n"
-                f"  Показы: {views:,} | Клики: {clicks:,}"
-            )
-        lines.append(f"\n💸 Итого расходов: *{total_spend:,.0f} ₽*")
-        await message.answer("\n".join(lines), parse_mode="Markdown")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
-
-
-@dp.message(Command("ask"))
-async def cmd_ask(message: Message):
-    question = message.text.replace("/ask", "").strip()
-    if not question:
-        await message.answer("Напиши вопрос после команды, например:\n/ask почему растут возвраты?")
-        return
-    await message.answer("🤔 Думаю...")
-    try:
-        data = await wb_api.get_all_data(WB_API_KEY)
-        context = wb_api.build_context(data)
-        answer = await ai_advisor.ask(question, context)
-        await message.answer(f"🤖 {answer}", parse_mode="Markdown")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка AI: {e}")
-
-
-# ─── Построение ежедневного отчёта ──────────────────────────────────────────
-
-async def build_daily_report() -> str:
-    data = await wb_api.get_all_data(WB_API_KEY)
-    context = wb_api.build_context(data)
-    tips = await ai_advisor.get_tips(context)
-
-    sales = data.get("sales", [])
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    today_sales = [s for s in sales if s.get("date", "").startswith(today) and s.get("saleID", "").startswith("S")]
-    today_returns = [s for s in sales if s.get("date", "").startswith(today) and s.get("saleID", "").startswith("R")]
-
-    revenue = sum(s.get("finishedPrice", 0) for s in today_sales)
-    orders = len(today_sales)
-    returns = len(today_returns)
-    return_rate = round(returns / max(orders + returns, 1) * 100, 1)
-
-    stocks = data.get("stocks", [])
-    critical = [s for s in stocks if s.get("quantity", 0) <= 5]
-
-    date_str = datetime.now().strftime("%d.%m.%Y")
-
-    lines = [
-        f"📊 *Ежедневный отчёт WB — {date_str}*",
-        "",
-        "━━━━━━━━━━━━━━━━━━━━",
-        "💰 *Продажи и выручка*",
-        f"  Выручка: *{revenue:,.0f} ₽*",
-        f"  Заказов: *{orders}*",
-        f"  Возвратов: *{returns}* ({return_rate}%)",
-        "",
-        "📦 *Склад*",
-    ]
-
-    if critical:
-        lines.append(f"  🔴 Критически мало у {len(critical)} товаров:")
-        for s in critical[:5]:
-            lines.append(f"     • {s.get('subject', '—')} — {s.get('quantity', 0)} шт.")
-    else:
-        lines.append("  🟢 Остатки в норме")
-
-    lines += [
-        "",
-        "━━━━━━━━━━━━━━━━━━━━",
-        "🤖 *Советы AI-аналитика:*",
-        "",
-        tips
-    ]
-
-    return "\n".join(lines)
-
-
-async def send_scheduled_report():
-    if not CHAT_ID:
-        logger.warning("CHAT_ID не задан, автоотчёт не отправлен")
-        return
-    try:
-        logger.info("Отправка ежедневного отчёта...")
-        text = await build_daily_report()
-        await bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="Markdown")
-        logger.info("Отчёт отправлен успешно")
-    except Exception as e:
-        logger.error(f"Ошибка отправки отчёта: {e}")
-
-
-# ─── Запуск ─────────────────────────────────────────────────────────────────
 
 async def main():
-    scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
-    scheduler.add_job(send_scheduled_report, "cron", hour=REPORT_HOUR, minute=0)
-    scheduler.start()
-    logger.info(f"Бот запущен. Автоотчёт в {REPORT_HOUR}:00 МСК")
+    bot = Bot(token=BOT_TOKEN)
+    dp = Dispatcher(storage=MemoryStorage())
+
+    @dp.message(CommandStart())
+    async def cmd_start(message: Message):
+        if not is_allowed(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        user_histories.pop(message.from_user.id, None)
+        await message.answer(
+            "👋 Привет! Я твой аналитик на Wildberries.\n\n"
+            "Просто напиши мне что хочешь узнать, например:\n\n"
+            "• <i>Какие продажи за последние 7 дней?</i>\n"
+            "• <i>Сравни этот месяц с прошлым</i>\n"
+            "• <i>Какие товары заканчиваются на складе?</i>\n"
+            "• <i>Сколько я заработал чистыми за 30 дней?</i>\n"
+            "• <i>Есть ли штрафы от WB?</i>\n\n"
+            "Команда /reset — начать разговор заново.",
+            parse_mode="HTML"
+        )
+
+    @dp.message(Command("reset"))
+    async def cmd_reset(message: Message):
+        user_histories.pop(message.from_user.id, None)
+        await message.answer("🔄 История очищена. Начинаем заново!")
+
+    @dp.message(F.text)
+    async def handle_message(message: Message):
+        if not is_allowed(message.from_user.id):
+            return
+
+        user_id = message.from_user.id
+        user_text = message.text.strip()
+
+        await bot.send_chat_action(message.chat.id, "typing")
+        history = get_history(user_id)
+
+        try:
+            response = await ask_agent(user_text, history)
+        except Exception as e:
+            logger.error(f"Agent error for user {user_id}: {e}")
+            response = "⚠️ Что-то пошло не так. Попробуй ещё раз или напиши /reset."
+
+        add_to_history(user_id, "user", user_text)
+        add_to_history(user_id, "assistant", response)
+
+        if len(response) <= 4096:
+            await message.answer(response, parse_mode="HTML")
+        else:
+            for i in range(0, len(response), 4096):
+                await message.answer(response[i:i+4096], parse_mode="HTML")
+
+    logger.info("Bot started")
     await dp.start_polling(bot)
 
 
