@@ -1,4 +1,3 @@
-import asyncio
 import aiohttp
 import logging
 from datetime import datetime, timedelta
@@ -89,19 +88,22 @@ class WBApiClient:
         return campaigns
 
     async def get_adv_stats(self, date_from: str, date_to: str, campaign_ids: list = None) -> list:
-        url = f"{WB_ADV_URL}/adv/v2/fullstats"
+        """Get advertising stats using new v3 API endpoint."""
         if not campaign_ids:
             campaigns = await self.get_adv_campaigns()
             campaign_ids = [c.get("advertId") for c in campaigns if c.get("advertId")]
         if not campaign_ids:
             return []
+        import asyncio
+        await asyncio.sleep(1)
         campaign_ids = campaign_ids[:100]
-        body = [
-            {"id": cid, "dates": [{"from": date_from, "to": date_to}]}
-            for cid in campaign_ids
-        ]
-        data = await self._post(url, body)
-        return data or []
+        ids_str = ",".join(str(cid) for cid in campaign_ids)
+        url = f"{WB_ADV_URL}/adv/v3/fullstats"
+        params = {"ids": ids_str, "beginDate": date_from, "endDate": date_to}
+        data = await self._get(url, params)
+        if isinstance(data, list):
+            return data
+        return []
 
     async def get_adv_balance(self) -> dict:
         url = f"{WB_ADV_URL}/adv/v1/balance"
