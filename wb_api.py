@@ -88,14 +88,16 @@ class WBApiClient:
         return campaigns
 
     async def get_adv_stats(self, date_from: str, date_to: str, campaign_ids: list = None) -> list:
-        url = f"{WB_ADV_URL}/adv/v2/fullstats"
-        if not campaign_ids:
-            campaigns = await self.get_adv_campaigns()
-            campaign_ids = [c.get("advertId") for c in campaigns if c.get("advertId")]
-        if not campaign_ids:
-            return []
-        campaign_ids = campaign_ids[:100]
-        body = [
+    import asyncio
+    url = f"{WB_ADV_URL}/adv/v2/fullstats"
+    if not campaign_ids:
+        campaigns = await self.get_adv_campaigns()
+        campaign_ids = [c.get("advertId") for c in campaigns if c.get("advertId")]
+    if not campaign_ids:
+        return []
+    await asyncio.sleep(1)
+    campaign_ids = campaign_ids[:100]
+    body = [
             {"id": cid, "dates": [{"from": date_from, "to": date_to}]}
             for cid in campaign_ids
         ]
