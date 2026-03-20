@@ -1,6 +1,3 @@
-"""
-ai_agent.py — Claude-powered agent that calls WB API as tools.
-"""
 
 import json
 import logging
@@ -10,143 +7,100 @@ from wb_api import WBApiClient
 from config import ANTHROPIC_API_KEY
 
 logger = logging.getLogger(__name__)
-
 wb = WBApiClient()
 
-# ── Tool definitions for Claude ────────────────────────────────────────────────
+# ── Tools ──────────────────────────────────────────────────────────────────────
 
 TOOLS = [
     {
         "name": "get_sales",
-        "description": (
-            "Получить данные о продажах за произвольный период. "
-            "Можно передать конкретные даты (date_from, date_to) ИЛИ количество дней назад (days). "
-            "Возвращает выручку, количество продаж, средний чек, топ товары и склады. "
-            "Используй date_from/date_to для исторических запросов типа 'с января по март' или 'за сентябрь'."
-        ),
+        "description": "Получить данные о продажах за произвольный период. Можно передать конкретные даты (date_from, date_to) ИЛИ количество дней назад (days). Возвращает выручку, количество продаж, средний чек, топ товары и склады.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "days": {
-                    "type": "integer",
-                    "description": "Количество дней назад от сегодня. Используй если нет конкретных дат."
-                },
-                "date_from": {
-                    "type": "string",
-                    "description": "Начало периода в формате YYYY-MM-DD, например 2024-09-01"
-                },
-                "date_to": {
-                    "type": "string",
-                    "description": "Конец периода в формате YYYY-MM-DD, например 2024-09-30"
-                }
+                "days": {"type": "integer", "description": "Количество дней назад от сегодня."},
+                "date_from": {"type": "string", "description": "Начало периода YYYY-MM-DD"},
+                "date_to": {"type": "string", "description": "Конец периода YYYY-MM-DD"},
+                "article": {"type": "string", "description": "Артикул товара для фильтрации."}
             },
             "required": []
         }
     },
     {
         "name": "get_orders",
-        "description": (
-            "Получить данные о заказах за произвольный период. "
-            "Можно передать конкретные даты (date_from, date_to) ИЛИ количество дней назад (days). "
-            "Возвращает общее количество, активные, отменённые заказы, топ регионы и артикулы. "
-            "Используй date_from/date_to для исторических запросов."
-        ),
+        "description": "Получить данные о заказах за произвольный период. Можно передать конкретные даты или количество дней. Возвращает количество, отмены, регионы, артикулы.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "days": {
-                    "type": "integer",
-                    "description": "Количество дней назад от сегодня."
-                },
-                "date_from": {
-                    "type": "string",
-                    "description": "Начало периода в формате YYYY-MM-DD, например 2024-09-01"
-                },
-                "date_to": {
-                    "type": "string",
-                    "description": "Конец периода в формате YYYY-MM-DD, например 2025-03-20"
-                },
-                "article": {
-                    "type": "string",
-                    "description": "Артикул товара для фильтрации. Если не указан — возвращает все товары."
-                }
+                "days": {"type": "integer", "description": "Количество дней назад от сегодня."},
+                "date_from": {"type": "string", "description": "Начало периода YYYY-MM-DD"},
+                "date_to": {"type": "string", "description": "Конец периода YYYY-MM-DD"},
+                "article": {"type": "string", "description": "Артикул товара для фильтрации."}
             },
             "required": []
         }
     },
     {
         "name": "get_sales_by_weeks",
-        "description": (
-            "Получить продажи разбитые по неделям за произвольный период. "
-            "Используй для вопросов типа 'какая неделя была лучшей', 'динамика по неделям', "
-            "'как менялись продажи с сентября'. Возвращает статистику по каждой неделе."
-        ),
+        "description": "Получить продажи разбитые по неделям. Используй для вопросов типа 'какая неделя была лучшей', 'динамика по неделям'.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "date_from": {
-                    "type": "string",
-                    "description": "Начало периода в формате YYYY-MM-DD"
-                },
-                "date_to": {
-                    "type": "string",
-                    "description": "Конец периода в формате YYYY-MM-DD"
-                },
-                "article": {
-                    "type": "string",
-                    "description": "Артикул товара для фильтрации. Если не указан — все товары."
-                }
+                "date_from": {"type": "string", "description": "Начало периода YYYY-MM-DD"},
+                "date_to": {"type": "string", "description": "Конец периода YYYY-MM-DD"},
+                "article": {"type": "string", "description": "Артикул товара для фильтрации."}
             },
             "required": ["date_from", "date_to"]
         }
     },
     {
         "name": "get_stocks",
-        "description": "Получить остатки товаров на складах WB. Показывает количество по складам, заканчивающиеся и нулевые позиции.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
+        "description": "Получить остатки товаров на складах WB.",
+        "input_schema": {"type": "object", "properties": {}, "required": []}
     },
     {
         "name": "get_finance",
-        "description": (
-            "Получить финансовый отчёт: выплаты от WB, логистика, хранение, штрафы, "
-            "удержания, чистая выручка и маржа."
-        ),
+        "description": "Получить финансовый отчёт: выплаты WB, логистика, хранение, штрафы, чистая выручка, маржа.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "days": {
-                    "type": "integer",
-                    "description": "Количество дней назад от сегодня."
-                },
-                "date_from": {
-                    "type": "string",
-                    "description": "Начало периода в формате YYYY-MM-DD"
-                },
-                "date_to": {
-                    "type": "string",
-                    "description": "Конец периода в формате YYYY-MM-DD"
-                }
+                "days": {"type": "integer", "description": "Количество дней назад от сегодня."},
+                "date_from": {"type": "string", "description": "Начало периода YYYY-MM-DD"},
+                "date_to": {"type": "string", "description": "Конец периода YYYY-MM-DD"}
             },
             "required": []
         }
     },
     {
-        "name": "compare_periods",
-        "description": (
-            "Сравнить два периода по продажам и заказам. "
-            "Показывает рост/падение выручки, заказов, среднего чека."
-        ),
+        "name": "get_adv_summary",
+        "description": "Получить сводную статистику по рекламным кампаниям: показы, клики, CTR, расходы, заказы с рекламы, ДРР. Используй для вопросов про рекламу, продвижение, рекламные расходы.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "days": {
-                    "type": "integer",
-                    "description": "Длина периода в днях. Текущий период — последние N дней, предыдущий — N дней до этого."
-                }
+                "days": {"type": "integer", "description": "Количество дней назад от сегодня. По умолчанию 7."},
+                "date_from": {"type": "string", "description": "Начало периода YYYY-MM-DD"},
+                "date_to": {"type": "string", "description": "Конец периода YYYY-MM-DD"}
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "get_adv_campaigns",
+        "description": "Получить список всех рекламных кампаний с их статусами и бюджетами.",
+        "input_schema": {"type": "object", "properties": {}, "required": []}
+    },
+    {
+        "name": "get_adv_balance",
+        "description": "Получить текущий баланс рекламного кабинета WB.",
+        "input_schema": {"type": "object", "properties": {}, "required": []}
+    },
+    {
+        "name": "compare_periods",
+        "description": "Сравнить два периода по продажам и заказам.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "description": "Длина периода в днях."}
             },
             "required": ["days"]
         }
@@ -156,17 +110,18 @@ TOOLS = [
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def resolve_dates(tool_input: dict) -> tuple[str, str]:
-    """Return (date_from_iso, date_to_iso) from either days or explicit dates."""
     if tool_input.get("date_from") and tool_input.get("date_to"):
-        df = tool_input["date_from"]
-        dt = tool_input["date_to"]
-        return f"{df}T00:00:00", f"{dt}T23:59:59"
+        return f"{tool_input['date_from']}T00:00:00", f"{tool_input['date_to']}T23:59:59"
     days = tool_input.get("days", 30)
     return wb.date_range(days)
 
+def resolve_dates_simple(tool_input: dict, default_days: int = 7) -> tuple[str, str]:
+    if tool_input.get("date_from") and tool_input.get("date_to"):
+        return tool_input["date_from"], tool_input["date_to"]
+    days = tool_input.get("days", default_days)
+    return wb.date_range_simple(days)
 
 def filter_by_period(items: list, date_from: str, date_to: str) -> list:
-    """Filter records to exact period window."""
     try:
         s = datetime.fromisoformat(date_from)
         e = datetime.fromisoformat(date_to)
@@ -186,7 +141,6 @@ def filter_by_period(items: list, date_from: str, date_to: str) -> list:
     except Exception:
         return items
 
-
 def filter_by_article(items: list, article: str) -> list:
     if not article:
         return items
@@ -197,25 +151,18 @@ def filter_by_article(items: list, article: str) -> list:
         or article_lower in str(i.get("nmId", "")).lower()
     ]
 
-
 # ── Tool executors ─────────────────────────────────────────────────────────────
 
 async def _run_get_sales(tool_input: dict) -> str:
     date_from, date_to = resolve_dates(tool_input)
-    sales_raw = await wb.get_sales(date_from)
-    sales = filter_by_period(sales_raw, date_from, date_to)
-
-    article = tool_input.get("article", "")
-    if article:
-        sales = filter_by_article(sales, article)
-
+    sales = filter_by_period(await wb.get_sales(date_from), date_from, date_to)
+    if tool_input.get("article"):
+        sales = filter_by_article(sales, tool_input["article"])
     if not sales:
         return "Нет данных по продажам за указанный период."
 
     revenue = sum(s.get("finishedPrice", 0) or 0 for s in sales)
     count = len(sales)
-    avg = revenue / count if count else 0
-
     products: dict[str, dict] = {}
     for s in sales:
         name = str(s.get("supplierArticle") or s.get("nmId", "?"))
@@ -224,85 +171,59 @@ async def _run_get_sales(tool_input: dict) -> str:
         products[name]["count"] += 1
         products[name]["revenue"] += s.get("finishedPrice", 0) or 0
     top = sorted(products.items(), key=lambda x: x[1]["revenue"], reverse=True)[:5]
-
     warehouses: dict[str, int] = {}
     for s in sales:
         wh = s.get("warehouseName") or "Неизвестно"
         warehouses[wh] = warehouses.get(wh, 0) + 1
-    top_wh = sorted(warehouses.items(), key=lambda x: x[1], reverse=True)[:3]
-
-    result = {
+    return json.dumps({
         "period": f"{date_from[:10]} — {date_to[:10]}",
         "total_revenue_rub": round(revenue, 2),
         "total_sales_count": count,
-        "average_check_rub": round(avg, 2),
-        "top_products": [
-            {"article": art, "revenue_rub": round(d["revenue"], 2), "count": d["count"]}
-            for art, d in top
-        ],
-        "top_warehouses": [{"name": wh, "count": cnt} for wh, cnt in top_wh]
-    }
-    return json.dumps(result, ensure_ascii=False)
+        "average_check_rub": round(revenue / count if count else 0, 2),
+        "top_products": [{"article": a, "revenue_rub": round(d["revenue"], 2), "count": d["count"]} for a, d in top],
+        "top_warehouses": [{"name": w, "count": c} for w, c in sorted(warehouses.items(), key=lambda x: x[1], reverse=True)[:3]]
+    }, ensure_ascii=False)
 
 
 async def _run_get_orders(tool_input: dict) -> str:
     date_from, date_to = resolve_dates(tool_input)
-    orders_raw = await wb.get_orders(date_from)
-    orders = filter_by_period(orders_raw, date_from, date_to)
-
-    article = tool_input.get("article", "")
-    if article:
-        orders = filter_by_article(orders, article)
-
+    orders = filter_by_period(await wb.get_orders(date_from), date_from, date_to)
+    if tool_input.get("article"):
+        orders = filter_by_article(orders, tool_input["article"])
     if not orders:
         return "Нет данных по заказам за указанный период."
 
     total = len(orders)
     cancelled = sum(1 for o in orders if o.get("isCancel") is True)
-    active = total - cancelled
-    cancel_rate = round(cancelled / total * 100, 1) if total else 0
-    total_sum = sum(o.get("finishedPrice", 0) or 0 for o in orders)
-
     regions: dict[str, int] = {}
+    articles: dict[str, int] = {}
     for o in orders:
         reg = o.get("regionName") or o.get("oblast") or "Не указан"
         regions[reg] = regions.get(reg, 0) + 1
-    top_regions = sorted(regions.items(), key=lambda x: x[1], reverse=True)[:5]
-
-    articles: dict[str, int] = {}
-    for o in orders:
         art = str(o.get("supplierArticle") or o.get("nmId", "?"))
         articles[art] = articles.get(art, 0) + 1
-    top_art = sorted(articles.items(), key=lambda x: x[1], reverse=True)[:5]
-
-    result = {
+    return json.dumps({
         "period": f"{date_from[:10]} — {date_to[:10]}",
         "total_orders": total,
-        "active_orders": active,
+        "active_orders": total - cancelled,
         "cancelled_orders": cancelled,
-        "cancel_rate_percent": cancel_rate,
-        "total_sum_rub": round(total_sum, 2),
-        "top_regions": [{"name": r, "count": c} for r, c in top_regions],
-        "top_articles": [{"article": a, "count": c} for a, c in top_art]
-    }
-    return json.dumps(result, ensure_ascii=False)
+        "cancel_rate_percent": round(cancelled / total * 100, 1) if total else 0,
+        "total_sum_rub": round(sum(o.get("finishedPrice", 0) or 0 for o in orders), 2),
+        "top_regions": [{"name": r, "count": c} for r, c in sorted(regions.items(), key=lambda x: x[1], reverse=True)[:5]],
+        "top_articles": [{"article": a, "count": c} for a, c in sorted(articles.items(), key=lambda x: x[1], reverse=True)[:5]]
+    }, ensure_ascii=False)
 
 
 async def _run_get_sales_by_weeks(tool_input: dict) -> str:
     date_from = f"{tool_input['date_from']}T00:00:00"
     date_to = f"{tool_input['date_to']}T23:59:59"
     article = tool_input.get("article", "")
-
-    sales_raw = await wb.get_sales(date_from)
-    sales = filter_by_period(sales_raw, date_from, date_to)
-
+    sales = filter_by_period(await wb.get_sales(date_from), date_from, date_to)
     if article:
         sales = filter_by_article(sales, article)
-
     if not sales:
         return "Нет данных о продажах за указанный период."
 
-    # Group by week
     weeks: dict[str, dict] = {}
     for s in sales:
         date_str = s.get("date") or s.get("lastChangeDate") or ""
@@ -310,7 +231,6 @@ async def _run_get_sales_by_weeks(tool_input: dict) -> str:
             continue
         try:
             dt = datetime.fromisoformat(date_str.replace("Z", "").split("+")[0][:19])
-            # Week start = Monday
             week_start = dt - timedelta(days=dt.weekday())
             week_key = week_start.strftime("%Y-%m-%d")
             week_label = f"{week_start.strftime('%d.%m')}–{(week_start + timedelta(days=6)).strftime('%d.%m.%Y')}"
@@ -325,35 +245,15 @@ async def _run_get_sales_by_weeks(tool_input: dict) -> str:
         return "Не удалось разбить данные по неделям."
 
     sorted_weeks = sorted(weeks.items(), key=lambda x: x[0])
-    best_week = max(weeks.items(), key=lambda x: x[1]["revenue"])
-    best_by_count = max(weeks.items(), key=lambda x: x[1]["count"])
-
-    weeks_list = [
-        {
-            "week": v["label"],
-            "sales_count": v["count"],
-            "revenue_rub": round(v["revenue"], 2)
-        }
-        for _, v in sorted_weeks
-    ]
-
-    result = {
+    best_rev = max(weeks.items(), key=lambda x: x[1]["revenue"])
+    best_cnt = max(weeks.items(), key=lambda x: x[1]["count"])
+    return json.dumps({
         "period": f"{tool_input['date_from']} — {tool_input['date_to']}",
         "article_filter": article or "все товары",
-        "total_weeks": len(weeks),
-        "best_week_by_revenue": {
-            "week": best_week[1]["label"],
-            "revenue_rub": round(best_week[1]["revenue"], 2),
-            "sales_count": best_week[1]["count"]
-        },
-        "best_week_by_count": {
-            "week": best_by_count[1]["label"],
-            "sales_count": best_by_count[1]["count"],
-            "revenue_rub": round(best_by_count[1]["revenue"], 2)
-        },
-        "weeks": weeks_list
-    }
-    return json.dumps(result, ensure_ascii=False)
+        "best_week_by_revenue": {"week": best_rev[1]["label"], "revenue_rub": round(best_rev[1]["revenue"], 2), "sales_count": best_rev[1]["count"]},
+        "best_week_by_count": {"week": best_cnt[1]["label"], "sales_count": best_cnt[1]["count"], "revenue_rub": round(best_cnt[1]["revenue"], 2)},
+        "weeks": [{"week": v["label"], "sales_count": v["count"], "revenue_rub": round(v["revenue"], 2)} for _, v in sorted_weeks]
+    }, ensure_ascii=False)
 
 
 async def _run_get_stocks() -> str:
@@ -361,11 +261,7 @@ async def _run_get_stocks() -> str:
     stocks = await wb.get_stocks(date_from)
     if not stocks:
         return "Нет данных по складским остаткам."
-
     total_qty = sum(s.get("quantity", 0) or 0 for s in stocks)
-    total_sku = len(set(str(s.get("nmId", "")) for s in stocks))
-    out_of_stock = sum(1 for s in stocks if (s.get("quantity") or 0) == 0)
-
     warehouses: dict[str, dict] = {}
     for s in stocks:
         wh = s.get("warehouseName") or "Неизвестно"
@@ -373,36 +269,21 @@ async def _run_get_stocks() -> str:
             warehouses[wh] = {"qty": 0, "skus": set()}
         warehouses[wh]["qty"] += s.get("quantity", 0) or 0
         warehouses[wh]["skus"].add(str(s.get("nmId", "")))
-    top_wh = sorted(warehouses.items(), key=lambda x: x[1]["qty"], reverse=True)[:5]
-
-    low_stock = [
-        str(s.get("supplierArticle") or s.get("nmId", "?"))
-        for s in stocks
-        if 0 < (s.get("quantity") or 0) < 5
-    ]
-
-    result = {
+    low_stock = list(set(str(s.get("supplierArticle") or s.get("nmId", "?")) for s in stocks if 0 < (s.get("quantity") or 0) < 5))
+    return json.dumps({
         "total_units": total_qty,
-        "unique_skus": total_sku,
-        "out_of_stock_positions": out_of_stock,
-        "top_warehouses": [
-            {"name": wh, "units": d["qty"], "skus": len(d["skus"])}
-            for wh, d in top_wh
-        ],
-        "low_stock_articles": list(set(low_stock))[:15]
-    }
-    return json.dumps(result, ensure_ascii=False)
+        "unique_skus": len(set(str(s.get("nmId", "")) for s in stocks)),
+        "out_of_stock_positions": sum(1 for s in stocks if (s.get("quantity") or 0) == 0),
+        "top_warehouses": [{"name": wh, "units": d["qty"], "skus": len(d["skus"])} for wh, d in sorted(warehouses.items(), key=lambda x: x[1]["qty"], reverse=True)[:5]],
+        "low_stock_articles": low_stock[:15]
+    }, ensure_ascii=False)
 
 
 async def _run_get_finance(tool_input: dict) -> str:
     date_from, date_to = resolve_dates(tool_input)
     rows = await wb.get_report_detail(date_from[:10], date_to[:10])
     if not rows:
-        return (
-            "Нет финансовых данных за указанный период. "
-            "Отчёт формируется еженедельно по пятницам."
-        )
-
+        return "Нет финансовых данных за указанный период. Отчёт формируется еженедельно по пятницам."
     retail = sum(r.get("retail_amount", 0) or 0 for r in rows)
     for_pay = sum(r.get("ppvz_for_pay", 0) or 0 for r in rows)
     delivery = sum(r.get("delivery_rub", 0) or 0 for r in rows)
@@ -411,15 +292,11 @@ async def _run_get_finance(tool_input: dict) -> str:
     deduction = sum(r.get("deduction", 0) or 0 for r in rows)
     acceptance = sum(r.get("acceptance", 0) or 0 for r in rows)
     net = for_pay - delivery - storage - penalty - deduction - acceptance
-    margin = round(net / retail * 100, 1) if retail else 0
-
     subjects: dict[str, float] = {}
     for r in rows:
         s = str(r.get("subject_name") or r.get("nm_id") or "Прочее")
         subjects[s] = subjects.get(s, 0.0) + (r.get("ppvz_for_pay", 0) or 0)
-    top_subj = sorted(subjects.items(), key=lambda x: x[1], reverse=True)[:5]
-
-    result = {
+    return json.dumps({
         "period": f"{date_from[:10]} — {date_to[:10]}",
         "retail_amount_rub": round(retail, 2),
         "wb_payout_rub": round(for_pay, 2),
@@ -429,17 +306,112 @@ async def _run_get_finance(tool_input: dict) -> str:
         "deductions_rub": round(deduction, 2),
         "acceptance_rub": round(acceptance, 2),
         "net_revenue_rub": round(net, 2),
-        "margin_percent": margin,
-        "top_categories": [
-            {"name": s, "revenue_rub": round(v, 2)} for s, v in top_subj
-        ]
+        "margin_percent": round(net / retail * 100, 1) if retail else 0,
+        "top_categories": [{"name": s, "revenue_rub": round(v, 2)} for s, v in sorted(subjects.items(), key=lambda x: x[1], reverse=True)[:5]]
+    }, ensure_ascii=False)
+
+
+async def _run_get_adv_summary(tool_input: dict) -> str:
+    date_from, date_to = resolve_dates_simple(tool_input, default_days=7)
+    stats = await wb.get_adv_stats(date_from, date_to)
+    if not stats:
+        return "Нет данных по рекламным кампаниям за указанный период. Убедись что в WB токене включено разрешение 'Продвижение'."
+
+    total_views = 0
+    total_clicks = 0
+    total_spend = 0.0
+    total_orders = 0
+    total_revenue = 0.0
+    campaigns_summary = []
+
+    for camp in stats:
+        camp_views = 0
+        camp_clicks = 0
+        camp_spend = 0.0
+        camp_orders = 0
+        camp_revenue = 0.0
+        camp_name = camp.get("advertName") or camp.get("advertId") or "Неизвестно"
+
+        for day in camp.get("days", []):
+            for app in day.get("apps", []):
+                for nm in app.get("nm", []):
+                    camp_views += nm.get("views", 0) or 0
+                    camp_clicks += nm.get("clicks", 0) or 0
+                    camp_spend += nm.get("sum", 0) or 0
+                    camp_orders += nm.get("orders", 0) or 0
+                    camp_revenue += nm.get("sum_price", 0) or 0
+
+        total_views += camp_views
+        total_clicks += camp_clicks
+        total_spend += camp_spend
+        total_orders += camp_orders
+        total_revenue += camp_revenue
+
+        if camp_views > 0 or camp_spend > 0:
+            campaigns_summary.append({
+                "name": str(camp_name),
+                "views": camp_views,
+                "clicks": camp_clicks,
+                "ctr_percent": round(camp_clicks / camp_views * 100, 2) if camp_views else 0,
+                "spend_rub": round(camp_spend, 2),
+                "orders": camp_orders,
+                "revenue_rub": round(camp_revenue, 2),
+                "drr_percent": round(camp_spend / camp_revenue * 100, 1) if camp_revenue else None,
+                "cpc_rub": round(camp_spend / camp_clicks, 2) if camp_clicks else None
+            })
+
+    campaigns_summary.sort(key=lambda x: x["spend_rub"], reverse=True)
+
+    return json.dumps({
+        "period": f"{date_from} — {date_to}",
+        "total": {
+            "views": total_views,
+            "clicks": total_clicks,
+            "ctr_percent": round(total_clicks / total_views * 100, 2) if total_views else 0,
+            "spend_rub": round(total_spend, 2),
+            "orders": total_orders,
+            "revenue_rub": round(total_revenue, 2),
+            "drr_percent": round(total_spend / total_revenue * 100, 1) if total_revenue else None,
+            "cpc_rub": round(total_spend / total_clicks, 2) if total_clicks else None
+        },
+        "campaigns": campaigns_summary[:10]
+    }, ensure_ascii=False)
+
+
+async def _run_get_adv_campaigns() -> str:
+    campaigns = await wb.get_adv_campaigns()
+    if not campaigns:
+        return "Нет активных рекламных кампаний или нет доступа к разделу Продвижение."
+
+    STATUS_MAP = {
+        -1: "удалена", 4: "готова к запуску", 7: "завершена",
+        8: "отказ", 9: "идут показы", 11: "на паузе"
     }
-    return json.dumps(result, ensure_ascii=False)
+    result = []
+    for c in campaigns[:20]:
+        result.append({
+            "id": c.get("advertId"),
+            "name": c.get("name") or "Без названия",
+            "status": STATUS_MAP.get(c.get("status"), str(c.get("status"))),
+            "type": c.get("type"),
+            "budget_rub": c.get("budget")
+        })
+    return json.dumps({"total_campaigns": len(campaigns), "campaigns": result}, ensure_ascii=False)
+
+
+async def _run_get_adv_balance() -> str:
+    balance = await wb.get_adv_balance()
+    if not balance:
+        return "Не удалось получить баланс рекламного кабинета."
+    return json.dumps({
+        "balance_rub": balance.get("balance", 0),
+        "bonus_rub": balance.get("bonus", 0),
+        "net_rub": balance.get("net", 0)
+    }, ensure_ascii=False)
 
 
 async def _run_compare_periods(days: int) -> str:
     import asyncio as aio
-
     now = datetime.now()
     fmt = "%Y-%m-%dT%H:%M:%S"
     cur_start = (now - timedelta(days=days)).strftime(fmt)
@@ -447,123 +419,105 @@ async def _run_compare_periods(days: int) -> str:
     cur_end = now.strftime(fmt)
     prev_end = (now - timedelta(days=days)).strftime(fmt)
 
-    cur_sales_raw, prev_sales_raw, cur_orders_raw, prev_orders_raw = await aio.gather(
-        wb.get_sales(cur_start),
-        wb.get_sales(prev_start),
-        wb.get_orders(cur_start),
-        wb.get_orders(prev_start),
+    cur_s_raw, prev_s_raw, cur_o_raw, prev_o_raw = await aio.gather(
+        wb.get_sales(cur_start), wb.get_sales(prev_start),
+        wb.get_orders(cur_start), wb.get_orders(prev_start),
     )
+    cur_s = filter_by_period(cur_s_raw, cur_start, cur_end)
+    prev_s = filter_by_period(prev_s_raw, prev_start, prev_end)
+    cur_o = filter_by_period(cur_o_raw, cur_start, cur_end)
+    prev_o = filter_by_period(prev_o_raw, prev_start, prev_end)
 
-    cur_sales = filter_by_period(cur_sales_raw, cur_start, cur_end)
-    prev_sales = filter_by_period(prev_sales_raw, prev_start, prev_end)
-    cur_orders = filter_by_period(cur_orders_raw, cur_start, cur_end)
-    prev_orders = filter_by_period(prev_orders_raw, prev_start, prev_end)
-
-    def _sales_stats(items):
+    def ss(items):
         rev = sum(s.get("finishedPrice", 0) or 0 for s in items)
         cnt = len(items)
         return {"revenue": round(rev, 2), "count": cnt, "avg": round(rev / cnt if cnt else 0, 2)}
 
-    def _orders_stats(items):
+    def os(items):
         total = len(items)
         cancelled = sum(1 for o in items if o.get("isCancel") is True)
-        return {
-            "total": total,
-            "cancelled": cancelled,
-            "cancel_rate": round(cancelled / total * 100, 1) if total else 0
-        }
+        return {"total": total, "cancelled": cancelled, "cancel_rate": round(cancelled / total * 100, 1) if total else 0}
 
-    def _delta(cur, prev):
-        if prev == 0:
-            return None
-        return round((cur - prev) / prev * 100, 1)
+    def delta(cur, prev):
+        return round((cur - prev) / prev * 100, 1) if prev else None
 
-    cs, ps = _sales_stats(cur_sales), _sales_stats(prev_sales)
-    co, po = _orders_stats(cur_orders), _orders_stats(prev_orders)
-
-    result = {
+    cs, ps, co, po = ss(cur_s), ss(prev_s), os(cur_o), os(prev_o)
+    return json.dumps({
         "current_period": f"{cur_start[:10]} — {cur_end[:10]}",
         "previous_period": f"{prev_start[:10]} — {prev_end[:10]}",
         "current": {"sales": cs, "orders": co},
         "previous": {"sales": ps, "orders": po},
         "growth": {
-            "revenue_percent": _delta(cs["revenue"], ps["revenue"]),
-            "sales_count_percent": _delta(cs["count"], ps["count"]),
-            "avg_check_percent": _delta(cs["avg"], ps["avg"]),
-            "orders_percent": _delta(co["total"], po["total"]),
+            "revenue_percent": delta(cs["revenue"], ps["revenue"]),
+            "sales_count_percent": delta(cs["count"], ps["count"]),
+            "avg_check_percent": delta(cs["avg"], ps["avg"]),
+            "orders_percent": delta(co["total"], po["total"])
         }
-    }
-    return json.dumps(result, ensure_ascii=False)
+    }, ensure_ascii=False)
 
 
-# ── Tool dispatcher ────────────────────────────────────────────────────────────
+# ── Dispatcher ─────────────────────────────────────────────────────────────────
 
 async def execute_tool(name: str, tool_input: dict) -> str:
     try:
-        if name == "get_sales":
-            return await _run_get_sales(tool_input)
-        elif name == "get_orders":
-            return await _run_get_orders(tool_input)
-        elif name == "get_sales_by_weeks":
-            return await _run_get_sales_by_weeks(tool_input)
-        elif name == "get_stocks":
-            return await _run_get_stocks()
-        elif name == "get_finance":
-            return await _run_get_finance(tool_input)
-        elif name == "compare_periods":
-            return await _run_compare_periods(tool_input["days"])
-        else:
-            return f"Неизвестный инструмент: {name}"
+        if name == "get_sales": return await _run_get_sales(tool_input)
+        elif name == "get_orders": return await _run_get_orders(tool_input)
+        elif name == "get_sales_by_weeks": return await _run_get_sales_by_weeks(tool_input)
+        elif name == "get_stocks": return await _run_get_stocks()
+        elif name == "get_finance": return await _run_get_finance(tool_input)
+        elif name == "get_adv_summary": return await _run_get_adv_summary(tool_input)
+        elif name == "get_adv_campaigns": return await _run_get_adv_campaigns()
+        elif name == "get_adv_balance": return await _run_get_adv_balance()
+        elif name == "compare_periods": return await _run_compare_periods(tool_input["days"])
+        else: return f"Неизвестный инструмент: {name}"
     except Exception as e:
         logger.error(f"Tool {name} error: {e}")
         return f"Ошибка при выполнении {name}: {str(e)}"
 
 
-# ── Main agent function ────────────────────────────────────────────────────────
+# ── Agent ──────────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """Ты — персональный аналитик магазина на Wildberries.
 Ты помогаешь продавцу анализировать его бизнес через удобный чат.
 
-Твои возможности (через инструменты):
-- Продажи: выручка, средний чек, топ товары — за любой период (конкретные даты или последние N дней)
-- Заказы: количество, отмены, регионы, фильтр по артикулу — за любой период
-- Склад: остатки, заканчивающиеся товары
-- Финансы: чистая выручка, логистика, штрафы, маржа — за любой период
-- Сравнение периодов: рост/падение показателей
-- Анализ по неделям: какая неделя была лучшей за любой период
+Твои возможности:
+- Продажи, заказы — за любой период (конкретные даты или последние N дней)
+- Склад — остатки, заканчивающиеся товары
+- Финансы — чистая выручка, логистика, штрафы, маржа
+- Сравнение периодов
+- Анализ по неделям
+- Реклама — показы, клики, CTR, расходы, ДРР, ROI по кампаниям
 
 Правила работы с датами:
 - Если пользователь называет конкретные даты — используй date_from и date_to
 - Если называет месяц — бери с 1-го по последнее число месяца
 - Если говорит "с сентября" — бери с 2024-09-01 до сегодня
 - Текущий год 2026, прошлый год 2025
-- Для анализа по неделям используй инструмент get_sales_by_weeks
+
+Правила контекста:
+- ВАЖНО: если в разговоре уже упоминался конкретный артикул и пользователь продолжает про него говорить — ВСЕГДА передавай этот артикул в параметр article
+- Если пользователь говорит "этот товар", "он", "по нему" — используй артикул из предыдущих сообщений
+- Не теряй контекст артикула и дат между сообщениями
 
 Правила ответов:
 - Пиши по-русски, живым и понятным языком
 - Используй цифры и делай выводы, не просто перечисляй данные
 - Выдели самое важное в начале ответа
-- Если видишь проблему (много отмен, товар заканчивается, штрафы растут) — скажи об этом явно
-- Форматируй ответ с эмодзи для читаемости в Telegram
-- НИКОГДА не используй символы ** для выделения текста — Telegram бот не поддерживает markdown
-- Используй только эмодзи и обычный текст для акцентов
-- Если данных нет или период не покрыт отчётом WB — объясни почему
-- Если вопрос не про аналитику — вежливо объясни специализацию
-- ВАЖНО: если в разговоре уже упоминался конкретный артикул и пользователь продолжает про него говорить (например "а сколько заказов?", "покажи склад", "а за прошлый месяц?") — ВСЕГДА передавай этот артикул в параметр article инструмента. Не теряй контекст артикула между сообщениями.
-- Если пользователь говорит "этот товар", "он", "по нему", "за тот же период" — используй артикул и даты из предыдущих сообщений разговора.
+- Если видишь проблему (много отмен, товар заканчивается, высокий ДРР) — скажи об этом явно
+- Используй эмодзи для читаемости в Telegram
+- НИКОГДА не используй символы ** для выделения текста
+- Если данных нет — объясни почему
 
 Сегодняшняя дата: """ + datetime.now().strftime("%d.%m.%Y")
 
 
 async def ask_agent(user_message: str, history: list[dict]) -> str:
     messages = history + [{"role": "user", "content": user_message}]
-
     headers = {
         "x-api-key": ANTHROPIC_API_KEY,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
-
     async with aiohttp.ClientSession() as session:
         for _ in range(8):
             payload = {
@@ -573,17 +527,11 @@ async def ask_agent(user_message: str, history: list[dict]) -> str:
                 "tools": TOOLS,
                 "messages": messages,
             }
-
-            async with session.post(
-                "https://api.anthropic.com/v1/messages",
-                headers=headers,
-                json=payload
-            ) as resp:
+            async with session.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload) as resp:
                 if resp.status != 200:
                     text = await resp.text()
                     logger.error(f"Anthropic API error {resp.status}: {text}")
-                    return "⚠️ Ошибка при обращении к AI. Попробуй ещё раз."
-
+                    return "Ошибка при обращении к AI. Попробуй ещё раз."
                 data = await resp.json()
 
             stop_reason = data.get("stop_reason")
@@ -594,12 +542,8 @@ async def ask_agent(user_message: str, history: list[dict]) -> str:
                 tool_results = []
                 for block in content:
                     if block.get("type") == "tool_use":
-                        tool_result = await execute_tool(block["name"], block.get("input", {}))
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block["id"],
-                            "content": tool_result
-                        })
+                        result = await execute_tool(block["name"], block.get("input", {}))
+                        tool_results.append({"type": "tool_result", "tool_use_id": block["id"], "content": result})
                 messages.append({"role": "user", "content": tool_results})
                 continue
 
@@ -607,6 +551,6 @@ async def ask_agent(user_message: str, history: list[dict]) -> str:
                 if block.get("type") == "text":
                     return block["text"]
 
-            return "⚠️ Не удалось получить ответ от AI."
+            return "Не удалось получить ответ от AI."
 
-    return "⚠️ Превышено количество шагов агента."
+    return "Превышено количество шагов агента."
