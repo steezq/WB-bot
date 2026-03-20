@@ -563,7 +563,7 @@ async def ask_agent(user_message: str, history: list[dict]) -> str:
     async with aiohttp.ClientSession() as session:
         for _ in range(8):
             payload = {
-                "model": "claude-sonnet-4-5",
+                "model": "claude-haiku-4-5-20251001",
                 "max_tokens": 2048,
                 "system": SYSTEM_PROMPT,
                 "tools": TOOLS,
